@@ -1,0 +1,237 @@
+import subprocess
+import sys
+import os
+import pandas as pd
+import pickle
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+import numpy as np
+import time
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
+import xgboost as xgb
+
+# Instalacja brakujących pakietów
+packages = ["pandas", "scikit-learn", "numpy", "matplotlib", "seaborn"]
+
+for package in packages:
+    try:
+        __import__(package)
+        print(f"{package} jest już zainstalowany.")
+    except ImportError:
+        print(f"{package} nie jest zainstalowany. Instalowanie...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Ścieżki do plików
+current_dir = os.getcwd()
+model_path = os.path.join(current_dir, 'G:/Projekty/BRANSON2/files/BRANSON_AI_MODEL')
+data_path = os.path.join(current_dir, 'G:/Projekty/BRANSON2/files/data')
+test_data_path = os.path.join(current_dir, 'G:/Projekty/BRANSON2/files/test')
+
+# Parametry modelu
+n_estimators = 100
+random_state = 42
+
+# Sprawdzenie, czy istnieje zapisany model
+model_exists = os.path.exists(model_path)
+
+def display_menu():
+    """Wyświetlanie menu"""
+    print("\nWybierz akcję:")
+    print("a) Generuj nowy model")
+    if model_exists:
+        print("\033[92mb) Doucz istniejący model\033[0m")
+        print("\033[92mc) Użyj istniejącego modelu do analizy wyników\033[0m")
+    else:
+        print("\033[90mb) Doucz istniejący model (niedostępne, brak modelu)\033[0m")
+        print("\033[90mc) Użyj istniejącego modelu do analizy wyników (niedostępne, brak modelu)\033[0m")
+
+def convert_values_to_numeric(data):
+    """Konwersja wartości tekstowych na liczby"""
+    for column in data.columns:
+        if data[column].dtype == 'object':
+            data[column] = data[column].apply(lambda x: 1 if x in ['OK', 'flat'] else
+                                              (0 if x in ['not flat', 'Leak Detected', 'Maintenance Needed'] else x))
+    return data
+
+def display_csv_info():
+    """Wyświetlanie liczby wierszy w plikach CSV"""
+    injection_data = pd.read_csv(os.path.join(data_path, 'injection_traceability.csv'))
+    robot_data = pd.read_csv(os.path.join(data_path, 'robot_traceability.csv'))
+    print(f"Liczba wierszy w injection_traceability.csv: {len(injection_data)}")
+    print(f"Liczba wierszy w robot_traceability.csv: {len(robot_data)}")
+    return injection_data, robot_data
+
+def plot_correlation_matrix(data, title="Macierz korelacji"):
+    """Rysowanie wykresu macierzy korelacji"""
+    plt.figure(figsize=(12, 10))
+    correlation_matrix = data.corr()
+    sns.heatmap(correlation_matrix, annot=False, cmap='coolwarm', center=0)
+    plt.title(title, fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+def prepare_data():
+    """Ładowanie, konwersja i łączenie danych"""
+    injection_data, robot_data = display_csv_info()
+    robot_data = convert_values_to_numeric(robot_data)
+    injection_data = convert_values_to_numeric(injection_data)
+    data = pd.merge(injection_data, robot_data, on="Cycle ID")
+    X = data.drop(columns=["Cycle ID", "Element Dropped"])
+    y = data["Element Dropped"]
+    return X, y
+
+def remove_highly_correlated_features(data, threshold=0.5):
+    """Usuwanie cech mocno skorelowanych"""
+    correlation_matrix = data.corr()
+    upper_triangle = correlation_matrix.where(np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool))
+    to_drop = [column for column in upper_triangle.columns if any(upper_triangle[column] > threshold)]
+    data = data.drop(columns=to_drop)
+    return data
+
+def split_data_linearly(X, y):
+    """Ręczny, liniowy podział danych na treningowe i testowe"""
+    split_index = int(0.8 * len(X))  # 80% na trening, 20% na test
+    X_train, X_test = X.iloc[:split_index], X.iloc[split_index:]
+    y_train, y_test = y.iloc[:split_index], y.iloc[split_index:]
+    print("Rozmiar zbioru treningowego:", len(X_train))
+    print("Rozmiar zbioru testowego:", len(X_test))
+    return X_train, X_test, y_train, y_test
+
+def generate_new_model_with_cross_validation():
+    """Generowanie nowego modelu z walidacją krzyżową"""
+    X, y = prepare_data()
+
+    # Usuwanie cechy Flatness (jeśli istnieje)
+    if "Flatness" in X.columns:
+        X = X.drop(columns=["Flatness"])
+        print("Usuwam cechę Flatness, ponieważ jest mocno skorelowana z Target.")
+
+    # Rysowanie macierzy korelacji przed usuwaniem
+    plot_correlation_matrix(X, title="Macierz korelacji przed usunięciem cech")
+
+    # Usuwanie cech mocno skorelowanych
+    X = remove_highly_correlated_features(X, threshold=0.8)
+
+    # Skalowanie danych
+    scaler = StandardScaler()
+    X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+
+    # Liniowy podział danych
+    X_train, X_test, y_train, y_test = split_data_linearly(X_scaled, y)
+
+    # Tworzenie modelu XGBClassifier
+    model = XGBClassifier(n_estimators=n_estimators, random_state=random_state, tree_method="hist", device="cuda")
+
+    # Walidacja krzyżowa
+    print("\nRozpoczęcie walidacji krzyżowej...")
+    cv_scores = cross_val_score(model, X_scaled, y, cv=5, scoring='accuracy', n_jobs=-1)
+    print(f"Średnia dokładność z walidacji krzyżowej: {np.mean(cv_scores):.4f}")
+    print(f"Wyniki walidacji krzyżowej: {cv_scores}")
+
+    # Trenowanie modelu na zbiorze treningowym
+    print("\nTrenowanie modelu na zbiorze treningowym...")
+    model.fit(X_train, y_train)
+
+    # Zapis modelu do pliku
+    with open(model_path, 'wb') as file:
+        pickle.dump(model, file)
+
+    # Predykcja i raport
+    y_pred = model.predict(X_test)
+    print("\nRaport z klasyfikacji dla danych testowych:")
+    print(classification_report(y_test, y_pred))
+
+    # Macierz konfuzji
+    cm = confusion_matrix(y_test, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+    disp.plot(cmap="Blues")
+    plt.show()
+
+def use_existing_model():
+    """Użycie istniejącego modelu do analizy nowych danych testowych."""
+    print("\nAnaliza wyników za pomocą istniejącego modelu...\n")
+    
+    # Wczytanie danych testowych
+    print("Wczytywanie danych testowych...")
+    injection_data_path = os.path.join(test_data_path, 'injection_traceability.csv')
+    robot_data_path = os.path.join(test_data_path, 'robot_traceability.csv')
+    
+    # Sprawdzenie, czy pliki istnieją
+    if not os.path.exists(injection_data_path) or not os.path.exists(robot_data_path):
+        print("Błąd: Nie znaleziono jednego lub obu plików danych testowych!")
+        return
+    
+    # Wczytywanie danych
+    injection_data = pd.read_csv(injection_data_path)
+    robot_data = pd.read_csv(robot_data_path)
+    print(f"Liczba wierszy w injection_traceability.csv: {len(injection_data)}")
+    print(f"Liczba wierszy w robot_traceability.csv: {len(robot_data)}")
+    
+    # Konwersja wartości tekstowych na liczby
+    print("Konwersja danych testowych na liczby...")
+    injection_data = convert_values_to_numeric(injection_data)
+    robot_data = convert_values_to_numeric(robot_data)
+    
+    # Łączenie danych na podstawie `Cycle ID`
+    print("Łączenie danych na podstawie 'Cycle ID'...")
+    test_data = pd.merge(injection_data, robot_data, on="Cycle ID", how="inner")
+    print(f"Rozmiar połączonego zbioru danych testowych: {test_data.shape}")
+    
+    # Przygotowanie zmiennych X (cechy) i y (target)
+    X_test = test_data.drop(columns=["Cycle ID", "Element Dropped"], errors='ignore')
+    y_test = test_data["Element Dropped"]
+    
+    # Usunięcie cechy Flatness, jeśli istnieje
+    if "Flatness" in X_test.columns:
+        X_test = X_test.drop(columns=["Flatness"])
+        print("Usunięto cechę Flatness z danych testowych.")
+    
+    # Normalizacja danych (jeśli była stosowana podczas trenowania)
+    print("Normalizacja danych testowych...")
+    scaler = StandardScaler()
+    X_test_scaled = pd.DataFrame(scaler.fit_transform(X_test), columns=X_test.columns)
+    
+    # Wczytanie istniejącego modelu
+    print("Wczytywanie istniejącego modelu...")
+    try:
+        with open(model_path, 'rb') as file:
+            model = pickle.load(file)
+        print("Model załadowany pomyślnie.")
+    except FileNotFoundError:
+        print("Błąd: Nie znaleziono zapisanego modelu!")
+        return
+    
+    # Predykcja na danych testowych
+    print("Przewidywanie wyników na danych testowych...")
+    y_pred = model.predict(X_test_scaled)
+    
+    # Raport z klasyfikacji
+    print("\nRaport z klasyfikacji dla nowych danych testowych:")
+    print(classification_report(y_test, y_pred))
+    
+    # Macierz konfuzji
+    print("\nMacierz konfuzji:")
+    cm = confusion_matrix(y_test, y_pred)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=[0, 1], yticklabels=[0, 1])
+    plt.xlabel('Predicted label')
+    plt.ylabel('True label')
+    plt.title('Confusion Matrix')
+    plt.show()
+
+# Menu i obsługa wyboru
+display_menu()
+choice = input("\nWybierz opcję (a, b, c): ").lower()
+
+if choice == 'a':
+    generate_new_model_with_cross_validation()
+elif choice == 'b' and model_exists:
+    print("Opcja douczania modelu jest jeszcze do zaimplementowania.")
+elif choice == 'c' and model_exists:
+    use_existing_model()
+else:
+    print("\nNieprawidłowy wybór lub brak modelu do douczania/analizy.")
