@@ -1,7 +1,7 @@
 import os
 import pickle
 import numpy as np
-import pandas as pd
+import pandas as pd4
 
 # scikit-learn
 from sklearn.model_selection import train_test_split
@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-# Dla ładnego formatowania tabeli wynikowej
+# Dla ładnego formatowania tabel
 # pip install tabulate
 from tabulate import tabulate
 
@@ -134,7 +134,7 @@ def eval_mlp_regression(model, loader, device="cpu"):
 # 5. Wczytywanie danych treningowych i zapisywanie ColumnTransformer
 ##############################################################################
 def load_and_preprocess_data(csv_filename):
-    df = pd.read_csv(csv_filename, parse_dates=["ApplicationDate"])
+    df = pd4.read_csv(csv_filename, parse_dates=["ApplicationDate"])
 
     # Przykładowe kolumny
     cat_features = [
@@ -299,9 +299,7 @@ def train_all_models(X_enc, y_class, y_reg):
     save_classification_metrics(classification_metrics, "classification_results.csv")
     save_regression_metrics(regression_metrics,       "regression_results.csv")
 
-    # Prosty komunikat dla użytkownika:
     print("Trening 6 modeli zakończony.")
-
 
 def save_classification_metrics(classification_metrics, filename):
     import csv
@@ -337,7 +335,150 @@ def risk_scale(score):
         return "HIGH RISK"
 
 ##############################################################################
-# 8. Predykcja z pliku testowego
+# 8. Ładowanie wszystkich modeli
+##############################################################################
+def load_all_models(input_dim):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    models_class = {}
+    models_reg = {}
+
+    # Klasyfikacja
+    if os.path.isfile("model_logistic_regression.pkl"):
+        with open("model_logistic_regression.pkl","rb") as f:
+            models_class["LogisticRegression"] = pickle.load(f)
+
+    if os.path.isfile("model_decision_tree_classifier.pkl"):
+        with open("model_decision_tree_classifier.pkl","rb") as f:
+            models_class["DecisionTreeClassifier"] = pickle.load(f)
+
+    if os.path.isfile("model_mlp_classifier.pt"):
+        mlp_clf = MLPClassifier(input_dim=input_dim).to(device)
+        mlp_clf.load_state_dict(torch.load("model_mlp_classifier.pt", map_location=device))
+        mlp_clf.eval()
+        models_class["MLPClassifier"] = mlp_clf
+
+    # Regresja
+    if os.path.isfile("model_linear_regression.pkl"):
+        with open("model_linear_regression.pkl","rb") as f:
+            models_reg["LinearRegression"] = pickle.load(f)
+
+    if os.path.isfile("model_decision_tree_regressor.pkl"):
+        with open("model_decision_tree_regressor.pkl","rb") as f:
+            models_reg["DecisionTreeRegressor"] = pickle.load(f)
+
+    if os.path.isfile("model_mlp_regressor.pt"):
+        mlp_reg = MLPRegressor(input_dim=input_dim).to(device)
+        mlp_reg.load_state_dict(torch.load("model_mlp_regressor.pt", map_location=device))
+        mlp_reg.eval()
+        models_reg["MLPRegressor"] = mlp_reg
+
+    return models_class, models_reg, device
+
+##############################################################################
+# 9. Funkcje do generowania i wyświetlania TABEL dla 3 banków
+##############################################################################
+def create_three_tables(X_enc, models_class, models_reg, device):
+    """
+    Tworzy trzy oddzielne tabelki:
+      - Bank A: LogisticRegression + LinearRegression
+      - Bank B: DecisionTreeClassifier + DecisionTreeRegressor
+      - Bank C: MLPClassifier + MLPRegressor
+    Zwraca trzy listy wierszy, które można potem wyświetlić za pomocą tabulate.
+    """
+    # Przygotowanie list wierszy
+    rows_bank_a = []
+    rows_bank_b = []
+    rows_bank_c = []
+
+    # Przechodzimy przez każdy wiersz (rekord)
+    for i in range(len(X_enc)):
+        row_vector = X_enc[i, :].reshape(1, -1)
+
+        # --- Bank A
+        loan_lr = None
+        risk_linr = None
+        risk_linr_label = None
+
+        if "LogisticRegression" in models_class:
+            loan_lr = models_class["LogisticRegression"].predict(row_vector)[0]
+        if "LinearRegression" in models_reg:
+            val_lr = models_reg["LinearRegression"].predict(row_vector)[0]
+            risk_linr = f"{val_lr:.2f}"
+            risk_linr_label = risk_scale(val_lr)
+
+        rows_bank_a.append([
+            i,
+            loan_lr,
+            risk_linr,
+            risk_linr_label
+        ])
+
+        # --- Bank B
+        loan_dtc = None
+        risk_dtr = None
+        risk_dtr_label = None
+
+        if "DecisionTreeClassifier" in models_class:
+            loan_dtc = models_class["DecisionTreeClassifier"].predict(row_vector)[0]
+        if "DecisionTreeRegressor" in models_reg:
+            val_dtr = models_reg["DecisionTreeRegressor"].predict(row_vector)[0]
+            risk_dtr = f"{val_dtr:.2f}"
+            risk_dtr_label = risk_scale(val_dtr)
+
+        rows_bank_b.append([
+            i,
+            loan_dtc,
+            risk_dtr,
+            risk_dtr_label
+        ])
+
+        # --- Bank C
+        loan_mlp = None
+        risk_mlp = None
+        risk_mlp_label = None
+
+        if "MLPClassifier" in models_class:
+            X_tensor = torch.from_numpy(row_vector).float().to(device)
+            with torch.no_grad():
+                out_mlp = models_class["MLPClassifier"](X_tensor).view(-1)
+                prob_mlp = torch.sigmoid(out_mlp)
+                loan_mlp = int((prob_mlp >= 0.5).item())
+
+        if "MLPRegressor" in models_reg:
+            X_tensor = torch.from_numpy(row_vector).float().to(device)
+            with torch.no_grad():
+                val_mlp = models_reg["MLPRegressor"](X_tensor).view(-1).item()
+            risk_mlp = f"{val_mlp:.2f}"
+            risk_mlp_label = risk_scale(val_mlp)
+
+        rows_bank_c.append([
+            i,
+            loan_mlp,
+            risk_mlp,
+            risk_mlp_label
+        ])
+
+    return rows_bank_a, rows_bank_b, rows_bank_c
+
+def print_three_tables(rows_a, rows_b, rows_c):
+    """
+    Wyświetla 3 oddzielne tabelki z wynikami.
+    """
+    headers_a = ["Index", "Loan(LR)", "Risk(LinR)", "RiskLabel(LinR)"]
+    headers_b = ["Index", "Loan(DTC)", "Risk(DTR)", "RiskLabel(DTR)"]
+    headers_c = ["Index", "Loan(MLP)", "Risk(MLP)", "RiskLabel(MLP)"]
+
+    print("\n--- Bank A --- (LogisticRegression + LinearRegression)")
+    print(tabulate(rows_a, headers=headers_a, tablefmt="pretty"))
+
+    print("\n--- Bank B --- (DecisionTreeClassifier + DecisionTreeRegressor)")
+    print(tabulate(rows_b, headers=headers_b, tablefmt="pretty"))
+
+    print("\n--- Bank C --- (MLPClassifier + MLPRegressor)")
+    print(tabulate(rows_c, headers=headers_c, tablefmt="pretty"))
+
+##############################################################################
+# 10. Predykcja z pliku testowego – teraz z 3 tabelami
 ##############################################################################
 def predict_from_test_file(test_filename):
     if not os.path.isfile("column_transformer.pkl"):
@@ -351,132 +492,134 @@ def predict_from_test_file(test_filename):
         print("Plik testowy nie istnieje.")
         return
 
-    df_test = pd.read_csv(test_filename, parse_dates=["ApplicationDate"])
+    df_test = pd4.read_csv(test_filename, parse_dates=["ApplicationDate"])
     X_test_enc = ct.transform(df_test)
     if not isinstance(X_test_enc, np.ndarray):
         X_test_enc = X_test_enc.toarray()
 
     # Ładujemy modele
-    models_class = {}
-    if os.path.isfile("model_logistic_regression.pkl"):
-        with open("model_logistic_regression.pkl","rb") as f:
-            models_class["LogisticRegression"] = pickle.load(f)
+    models_class, models_reg, device = load_all_models(X_test_enc.shape[1])
 
-    if os.path.isfile("model_decision_tree_classifier.pkl"):
-        with open("model_decision_tree_classifier.pkl","rb") as f:
-            models_class["DecisionTreeClassifier"] = pickle.load(f)
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if os.path.isfile("model_mlp_classifier.pt"):
-        input_dim = X_test_enc.shape[1]
-        mlp_clf = MLPClassifier(input_dim=input_dim).to(device)
-        mlp_clf.load_state_dict(torch.load("model_mlp_classifier.pt", map_location=device))
-        mlp_clf.eval()
-        models_class["MLPClassifier"] = mlp_clf
-
-    models_reg = {}
-    if os.path.isfile("model_linear_regression.pkl"):
-        with open("model_linear_regression.pkl","rb") as f:
-            models_reg["LinearRegression"] = pickle.load(f)
-
-    if os.path.isfile("model_decision_tree_regressor.pkl"):
-        with open("model_decision_tree_regressor.pkl","rb") as f:
-            models_reg["DecisionTreeRegressor"] = pickle.load(f)
-
-    if os.path.isfile("model_mlp_regressor.pt"):
-        input_dim = X_test_enc.shape[1]
-        mlp_reg = MLPRegressor(input_dim=input_dim).to(device)
-        mlp_reg.load_state_dict(torch.load("model_mlp_regressor.pt", map_location=device))
-        mlp_reg.eval()
-        models_reg["MLPRegressor"] = mlp_reg
-
-    # Przygotowujemy dane do wyświetlenia w tabeli
-    table_rows = []
-    headers = [
-        "Index",
-        "Loan(LR)","Loan(DTC)","Loan(MLP)",
-        "Risk(LinR)", "RiskLabel(LinR)",
-        "Risk(DTR)",  "RiskLabel(DTR)",
-        "Risk(MLP)",  "RiskLabel(MLP)"
-    ]
-
-    for i in range(len(X_test_enc)):
-        row_vector = X_test_enc[i,:].reshape(1, -1)
-
-        # Klasyfikacja
-        loan_lr  = None
-        loan_dtc = None
-        loan_mlp = None
-
-        if "LogisticRegression" in models_class:
-            loan_lr = models_class["LogisticRegression"].predict(row_vector)[0]
-        if "DecisionTreeClassifier" in models_class:
-            loan_dtc = models_class["DecisionTreeClassifier"].predict(row_vector)[0]
-        if "MLPClassifier" in models_class:
-            X_tensor = torch.from_numpy(row_vector).float().to(device)
-            with torch.no_grad():
-                out_mlp = models_class["MLPClassifier"](X_tensor).view(-1)
-                prob_mlp = torch.sigmoid(out_mlp)
-                loan_mlp = int((prob_mlp >= 0.5).item())
-
-        # Regresja
-        risk_linr = None
-        risk_linr_label = None
-        risk_dtr  = None
-        risk_dtr_label = None
-        risk_mlp  = None
-        risk_mlp_label = None
-
-        if "LinearRegression" in models_reg:
-            val_lr = models_reg["LinearRegression"].predict(row_vector)[0]
-            risk_linr = f"{val_lr:.2f}"
-            risk_linr_label = risk_scale(val_lr)
-
-        if "DecisionTreeRegressor" in models_reg:
-            val_dtr = models_reg["DecisionTreeRegressor"].predict(row_vector)[0]
-            risk_dtr = f"{val_dtr:.2f}"
-            risk_dtr_label = risk_scale(val_dtr)
-
-        if "MLPRegressor" in models_reg:
-            X_tensor = torch.from_numpy(row_vector).float().to(device)
-            with torch.no_grad():
-                out_reg = models_reg["MLPRegressor"](X_tensor).view(-1).item()
-            risk_mlp = f"{out_reg:.2f}"
-            risk_mlp_label = risk_scale(out_reg)
-
-        table_rows.append([
-            i,
-            loan_lr, loan_dtc, loan_mlp,
-            risk_linr, risk_linr_label,
-            risk_dtr, risk_dtr_label,
-            risk_mlp, risk_mlp_label
-        ])
-
-    # Wyświetlamy tylko tabelę
-    print(tabulate(table_rows, headers=headers, tablefmt="pretty"))
+    # Tworzymy 3 zestawy wierszy
+    rows_bank_a, rows_bank_b, rows_bank_c = create_three_tables(
+        X_test_enc, models_class, models_reg, device
+    )
+    # Wyświetlamy w 3 osobnych tabelkach
+    print_three_tables(rows_bank_a, rows_bank_b, rows_bank_c)
 
 ##############################################################################
-# 9. Zapisywanie metryk w formie tabel
+# 11. Zapisywanie metryk w formie tabel
 ##############################################################################
 def show_metrics():
     # Klasyfikacja
     if os.path.isfile("classification_results.csv"):
-        dfc = pd.read_csv("classification_results.csv")
+        dfc = pd4.read_csv("classification_results.csv")
         print(tabulate(dfc, headers=dfc.columns, tablefmt="pretty"))
     # Regresja
     if os.path.isfile("regression_results.csv"):
-        dfr = pd.read_csv("regression_results.csv")
+        dfr = pd4.read_csv("regression_results.csv")
         print(tabulate(dfr, headers=dfr.columns, tablefmt="pretty"))
 
 ##############################################################################
-# 10. MENU GŁÓWNE
+# 12. Weryfikacja klienta (ręcznie lub z pliku CSV) – z 3 osobnymi tabelami
+##############################################################################
+def verify_client():
+    if not os.path.isfile("column_transformer.pkl"):
+        print("Brak column_transformer.pkl – najpierw wczytaj dane treningowe (opcja 1).")
+        return
+
+    ct = load_column_transformer("column_transformer.pkl")
+
+    print("Wybierz metodę weryfikacji:")
+    print("  a) Podaj dane ręcznie (pojedynczy klient)")
+    print("  b) Wczytaj z pliku CSV (wiele rekordów)")
+    subchoice = input("Wybierz a/b: ").strip().lower()
+
+    # Te same kolumny (dla spójności z danymi treningowymi)
+    cat_features = [
+        'EmploymentStatus',
+        'EducationLevel',
+        'MaritalStatus',
+        'HomeOwnershipStatus',
+        'LoanPurpose'
+    ]
+    num_features = [
+        'Age','AnnualIncome','CreditScore','Experience','LoanAmount','LoanDuration',
+        'NumberOfDependents','MonthlyDebtPayments','CreditCardUtilizationRate',
+        'NumberOfOpenCreditLines','NumberOfCreditInquiries','DebtToIncomeRatio',
+        'BankruptcyHistory','PreviousLoanDefaults','PaymentHistory',
+        'LengthOfCreditHistory','SavingsAccountBalance','CheckingAccountBalance',
+        'TotalAssets','TotalLiabilities','MonthlyIncome','UtilityBillsPaymentHistory',
+        'JobTenure','NetWorth','BaseInterestRate','InterestRate','MonthlyLoanPayment',
+        'TotalDebtToIncomeRatio'
+    ]
+
+    if subchoice == "a":
+        # WPROWADZAMY 1 KLIENTA RĘCZNIE
+        user_data = {}
+        print("\nPodaj dane klienta (zatwierdzaj klawiszem ENTER).")
+        # Cechy kategoryczne:
+        for cat in cat_features:
+            val = input(f"{cat}: ").strip()
+            user_data[cat] = val
+
+        # Cechy numeryczne:
+        for num in num_features:
+            val = input(f"{num} (wartość liczbowa): ").strip()
+            try:
+                user_data[num] = float(val)
+            except ValueError:
+                print(f"Niepoprawna wartość dla {num}. Przyjmuję 0.")
+                user_data[num] = 0.0
+
+        # Tworzymy 1-wierszowy DataFrame
+        df_user = pd4.DataFrame([user_data])
+        X_user_enc = ct.transform(df_user)
+        if not isinstance(X_user_enc, np.ndarray):
+            X_user_enc = X_user_enc.toarray()
+
+        models_class, models_reg, device = load_all_models(X_user_enc.shape[1])
+
+        # Tworzymy tabele (de facto będzie jedna linijka w każdej tabeli)
+        rows_bank_a, rows_bank_b, rows_bank_c = create_three_tables(
+            X_user_enc, models_class, models_reg, device
+        )
+        print_three_tables(rows_bank_a, rows_bank_b, rows_bank_c)
+
+    elif subchoice == "b":
+        # WPROWADZAMY DANE Z PLIKU CSV (MOGĄ BYĆ WIELE WIERSZY)
+        csv_file = input("Podaj nazwę pliku CSV z danymi klientów: ").strip()
+        if not os.path.isfile(csv_file):
+            print("Plik nie istnieje.")
+            return
+
+        df_csv = pd4.read_csv(csv_file)
+        # Zakładamy, że plik CSV ma te same kolumny co dane treningowe
+        X_enc_csv = ct.transform(df_csv)
+        if not isinstance(X_enc_csv, np.ndarray):
+            X_enc_csv = X_enc_csv.toarray()
+
+        models_class, models_reg, device = load_all_models(X_enc_csv.shape[1])
+
+        # Tworzymy trzy oddzielne zestawy wierszy
+        rows_bank_a, rows_bank_b, rows_bank_c = create_three_tables(
+            X_enc_csv, models_class, models_reg, device
+        )
+        print_three_tables(rows_bank_a, rows_bank_b, rows_bank_c)
+
+    else:
+        print("Nieprawidłowy wybór. Powrót do menu głównego.")
+
+##############################################################################
+# 13. MENU GŁÓWNE
 ##############################################################################
 def main_menu():
     print("\n1. Wczytaj dane TRENINGOWE z CSV i zapisz ColumnTransformer")
     print("2. Trenuj 6 modeli (3 klasyfikacja + 3 regresja)")
-    print("3. Wczytaj plik TESTOWY i pokaż wyniki (tabela) dla wszystkich modeli")
+    print("3. Wczytaj plik TESTOWY i pokaż wyniki (3 oddzielne tabele)")
     print("4. Pokaż porównanie metryk (tabele z plików CSV)")
-    print("5. Zakończ")
+    print("5. Weryfikuj klienta (ręcznie lub z pliku CSV) – też 3 tabele")
+    print("6. Zakończ")
 
 def main():
     data_loaded = False
@@ -507,6 +650,9 @@ def main():
         elif choice == '4':
             show_metrics()
         elif choice == '5':
+            verify_client()
+        elif choice == '6':
+            print("Koniec programu. Do zobaczenia!")
             break
         else:
             print("Nieprawidłowa opcja. Spróbuj ponownie.")
