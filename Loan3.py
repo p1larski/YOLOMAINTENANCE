@@ -184,9 +184,9 @@ def load_column_transformer(filename="column_transformer.pkl"):
 # 6. Funkcja do trenowania 6 modeli i zapisywania metryk
 ##############################################################################
 def train_all_models(X_enc, y_class, y_reg):
-    # Podział danych na train/test - nielosowy (shuffle=False).
     from sklearn.model_selection import train_test_split
 
+    # Podział danych na train/test - nielosowy (shuffle=False).
     X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(
         X_enc, y_class, test_size=0.2, random_state=SEED, shuffle=False
     )
@@ -408,13 +408,6 @@ def load_all_models(input_dim):
 # 10. Funkcje do generowania i wyświetlania TABEL dla 3 banków
 ##############################################################################
 def create_three_tables(X_enc, models_class, models_reg, device):
-    """
-    Tworzy trzy oddzielne tabelki:
-      - Bank A: LogisticRegression + LinearRegression
-      - Bank B: DecisionTreeClassifier + DecisionTreeRegressor
-      - Bank C: MLPClassifier + MLPRegressor
-    Zwraca trzy listy wierszy, które można potem wyświetlić za pomocą tabulate.
-    """
     rows_bank_a = []
     rows_bank_b = []
     rows_bank_c = []
@@ -434,12 +427,7 @@ def create_three_tables(X_enc, models_class, models_reg, device):
             risk_linr = f"{val_lr:.2f}"
             risk_linr_label = risk_scale(val_lr)
 
-        rows_bank_a.append([
-            i,
-            loan_lr,
-            risk_linr,
-            risk_linr_label
-        ])
+        rows_bank_a.append([i, loan_lr, risk_linr, risk_linr_label])
 
         # --- Bank B
         loan_dtc = None
@@ -453,12 +441,7 @@ def create_three_tables(X_enc, models_class, models_reg, device):
             risk_dtr = f"{val_dtr:.2f}"
             risk_dtr_label = risk_scale(val_dtr)
 
-        rows_bank_b.append([
-            i,
-            loan_dtc,
-            risk_dtr,
-            risk_dtr_label
-        ])
+        rows_bank_b.append([i, loan_dtc, risk_dtr, risk_dtr_label])
 
         # --- Bank C
         loan_mlp = None
@@ -479,12 +462,7 @@ def create_three_tables(X_enc, models_class, models_reg, device):
             risk_mlp = f"{val_mlp:.2f}"
             risk_mlp_label = risk_scale(val_mlp)
 
-        rows_bank_c.append([
-            i,
-            loan_mlp,
-            risk_mlp,
-            risk_mlp_label
-        ])
+        rows_bank_c.append([i, loan_mlp, risk_mlp, risk_mlp_label])
 
     return rows_bank_a, rows_bank_b, rows_bank_c
 
@@ -503,7 +481,7 @@ def print_three_tables(rows_a, rows_b, rows_c):
     print(tabulate(rows_c, headers=headers_c, tablefmt="pretty"))
 
 ##############################################################################
-# 11. Predykcja z pliku testowego – teraz z 3 tabelami
+# 11. Predykcja z pliku testowego (pozostaje w kodzie, ale usunięta z menu)
 ##############################################################################
 def predict_from_test_file(test_filename):
     if not os.path.isfile("column_transformer.pkl"):
@@ -522,14 +500,11 @@ def predict_from_test_file(test_filename):
     if not isinstance(X_test_enc, np.ndarray):
         X_test_enc = X_test_enc.toarray()
 
-    # Ładujemy modele
     models_class, models_reg, device = load_all_models(X_test_enc.shape[1])
 
-    # Tworzymy 3 zestawy wierszy
     rows_bank_a, rows_bank_b, rows_bank_c = create_three_tables(
         X_test_enc, models_class, models_reg, device
     )
-    # Wyświetlamy w 3 osobnych tabelkach
     print_three_tables(rows_bank_a, rows_bank_b, rows_bank_c)
 
 ##############################################################################
@@ -621,10 +596,9 @@ def verify_client():
 def main_menu():
     print("\n1. Wczytaj dane TRENINGOWE z CSV i zapisz ColumnTransformer")
     print("2. Trenuj 6 modeli (3 klasyfikacja + 3 regresja)")
-    print("3. Wczytaj plik TESTOWY i pokaż wyniki (3 oddzielne tabele)")
-    print("4. Weryfikuj klienta (ręcznie lub z pliku CSV) – też 3 tabele")
-    print("5. Zakończ")
-    # Brak jawnej opcji "metryki" – to będzie nasz sekret ;-)
+    print("3. Weryfikuj klienta (ręcznie lub z pliku CSV) – 3 tabele dla 3 banków")
+    print("4. Zakończ")
+    # punkt 3 z poprzedniej wersji został usunięty, a menu przesunięte
 
 def main():
     data_loaded = False
@@ -635,8 +609,8 @@ def main():
     while True:
         main_menu()
         choice = input().strip()
-        
-        # Ukryta opcja "metryki"
+
+        # Ukryta opcja "metryki" (sekret)
         if choice.lower() == "metryki":
             show_metrics()
             continue  # wracamy do pętli menu
@@ -656,11 +630,9 @@ def main():
             else:
                 train_all_models(X_enc, y_class, y_reg)
         elif choice == '3':
-            test_fname = input("Podaj nazwę pliku testowego (np. loan_test.csv): ").strip()
-            predict_from_test_file(test_fname)
-        elif choice == '4':
+            # Nowy punkt 3 => Weryfikacja klienta
             verify_client()
-        elif choice == '5':
+        elif choice == '4':
             print("Koniec programu. Do zobaczenia!")
             break
         else:
